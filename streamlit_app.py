@@ -7,16 +7,17 @@ import streamlit as st
 import re
 from rank_bm25 import BM25Okapi
 import numpy as np
+import os
 
 # Load Open-Source Embedding Model
 EMBEDDING_MODEL = "intfloat/e5-large-v2"  # or "BAAI/bge-large-en"
 embedder = SentenceTransformer(EMBEDDING_MODEL)
 embedding_dim = embedder.get_sentence_embedding_dimension()
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 # Load Open-Source SLM
 SLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
-tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL)
-
+tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN)
 # Configure 4-bit Quantization with CPU Offloading
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -26,11 +27,7 @@ bnb_config = BitsAndBytesConfig(
 )
 
 # Load Model with Auto Device Mapping
-model = AutoModelForCausalLM.from_pretrained(
-    SLM_MODEL, 
-    quantization_config=bnb_config, 
-    device_map="auto"  # Automatically offload to CPU/GPU as needed
-)
+model = AutoModelForCausalLM.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN, device_map="auto")
 
 # Sample Financial Data (Chunk Merging & Adaptive Retrieval Applied)
 financial_docs = [
