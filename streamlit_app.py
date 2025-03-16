@@ -2,6 +2,7 @@ import faiss
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+import fastapi
 import streamlit as st
 import re
 from rank_bm25 import BM25Okapi
@@ -13,25 +14,33 @@ EMBEDDING_MODEL = "intfloat/e5-large-v2"  # or "BAAI/bge-large-en"
 embedder = SentenceTransformer(EMBEDDING_MODEL)
 embedding_dim = embedder.get_sentence_embedding_dimension()
 
-# Load Hugging Face API Token from Streamlit Secrets
-HF_TOKEN = st.secrets["HF_TOKEN"]  # Use secrets manager
+# Hugging Face Token
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Load Open-Source SLM
-SLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
-tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN)
+# Load Smaller Open-Source SLM (Optimized for Streamlit Cloud)
+SLM_MODEL = "google/gemma-2b-it"  # Replaces Mistral-7B (too large)
 
-# Configure 4-bit Quantization with CPU Offloading
+# Configure 8-bit Quantization for Lower Memory Usage
 bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16,
-    quant_type="nf4",
-    llm_int8_enable_fp32_cpu_offload=True  # Enable CPU offloading for large layers
+    load_in_8bit=True,  # Enables 8-bit mode
+    bnb_4bit_compute_dtype=torch.float16
 )
 
-# Load Model with Auto Device Mapping
-model = AutoModelForCausalLM.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN, device_map="auto")
+# Load Tokenizer and Model with Optimized Settings
+tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL, token=HF_TOKEN)
 
-# Sample Financial Data
+try:
+    model = AutoModelForCausalLM.from_pretrained(
+        SLM_MODEL,
+        token=HF_TOKEN,
+        quantization_config=bnb_config,
+        device_map="auto"
+    )
+except RuntimeError:
+    # If 8-bit fails, fallback to CPU mode
+    model = AutoModelForCausalLM.from_pretrained(SLM_MODEL, token=HF_TOKEN).to("cpu")
+
+# Sample Financial Data (Chunk Merging & Adaptive Retrieval Applied)
 financial_docs = [
     "Revenue for 2023 was $5B. Q4 showed strong performance with an increase in net profit.",
     "Net income increased by 20% due to higher sales in international markets.",
@@ -62,9 +71,6 @@ def index_documents():
     embeddings = embedder.encode(chunked_docs, convert_to_tensor=True).cpu().numpy()
     index.add(embeddings)
 
-# Perform indexing before running the Streamlit app
-index_documents()
-
 # Adaptive Retrieval Function
 def retrieve_documents(query, top_k=3):
     query_embedding = embedder.encode([query], convert_to_tensor=True).cpu().numpy()
@@ -88,6 +94,18 @@ def generate_response(context, question):
     outputs = model.generate(**inputs, max_length=200)
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
+# FastAPI Endpoint
+app = fastapi.FastAPI()
+
+@app.get("/query")
+def query_api(q: str):
+    error = validate_query(q)
+    if error:
+        return {"error": error}
+    retrieved_docs = retrieve_documents(q)
+    response = generate_response(" ".join(retrieved_docs), q)
+    return {"answer": response, "sources": retrieved_docs}
+
 # Streamlit UI
 st.title("Financial RAG Q&A")
 user_query = st.text_input("Ask a financial question")
@@ -100,3 +118,6 @@ if st.button("Submit"):
         response = generate_response(" ".join(retrieved_docs), user_query)
         st.write("**Answer:**", response)
         st.write("**Sources:**", retrieved_docs)
+
+if __name__ == "__main__":
+    index_documents()
