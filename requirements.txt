@@ -1,0 +1,9 @@
+faiss-cpu
+torch
+sentence-transformers
+transformers
+bitsandbytes
+fastapi
+streamlit
+numpy
+rank_bm25
