@@ -77,4 +77,26 @@ def retrieve_documents(query, top_k=3):
 # Guardrail: Input-Side Filtering
 FORBIDDEN_TERMS = ["predict", "stock price"]
 def validate_query(query):
-    if any(re.search(fr"\b{term}\b", query, re.IGNORECAS
+    if any(re.search(fr"\b{term}\b", query, re.IGNORECASE) for term in FORBIDDEN_TERMS):
+        return "Query contains speculative terms. Please refine your question."
+    return None
+
+# Response Generation
+def generate_response(context, question):
+    input_text = f"Context: {context} \n Question: {question}"
+    inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+    outputs = model.generate(**inputs, max_length=200)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# Streamlit UI
+st.title("Financial RAG Q&A")
+user_query = st.text_input("Ask a financial question")
+if st.button("Submit"):
+    error = validate_query(user_query)
+    if error:
+        st.error(error)
+    else:
+        retrieved_docs = retrieve_documents(user_query)
+        response = generate_response(" ".join(retrieved_docs), user_query)
+        st.write("**Answer:**", response)
+        st.write("**Sources:**", retrieved_docs)
