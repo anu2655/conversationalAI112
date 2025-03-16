@@ -1,73 +1,119 @@
 import os
 import logging
 import streamlit as st
-import faiss
+import torch
 import yfinance as yf
 from sentence_transformers import SentenceTransformer
-from rank_bm25 import BM25Okapi
+from typing import List, Dict
 
 # ✅ Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ Load Embedding Model
-embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# ✅ Ensure PyTorch uses CPU to prevent CUDA errors
+device = "cpu"  # Force CPU mode
+logger.info(f"Using device: {device}")
 
-# ✅ Global variables for document storage & indexing
-documents, document_embeddings, index, bm25 = [], [], None, None
+# ✅ Load Embedding Model (Sentence-Transformers)
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
 
-def fetch_financial_data(ticker):
-    """Fetch latest financial data from Yahoo Finance."""
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    return f"{info['longName']} reported a revenue of {info.get('totalRevenue', 'N/A')} with net income of {info.get('netIncomeToCommon', 'N/A')}."
+# ✅ Global variable to store indexed documents
+document_index = []
 
+# ✅ Step 1: Load Real Financial Data
+def load_financial_data(companies: List[str]) -> List[Dict]:
+    """
+    Fetches financial statements from Yahoo Finance.
+
+    Args:
+        companies (List[str]): List of stock ticker symbols.
+
+    Returns:
+        List[Dict]: A list of financial document entries.
+    """
+    logger.info(f"Fetching financial data for companies: {companies}")
+
+    financial_documents = []
+    for ticker in companies:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+
+            # Extract financial data (Modify as needed)
+            revenue = info.get("totalRevenue", "N/A")
+            profit = info.get("grossProfits", "N/A")
+            summary = info.get("longBusinessSummary", "N/A")
+
+            doc_text = f"{ticker}: Revenue = {revenue}, Profit = {profit}. {summary}"
+            financial_documents.append({"company": ticker, "statement": doc_text})
+
+            logger.info(f"✅ Data loaded for {ticker}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch data for {ticker}: {e}")
+
+    return financial_documents
+
+# ✅ Step 2: Index Documents with Embeddings
 def index_documents():
-    """Fetch financial data and index it using FAISS and BM25."""
-    global documents, document_embeddings, index, bm25
-    logger.info("Fetching financial data...")
+    """
+    Indexes financial documents using embeddings.
+    """
+    global document_index
+    logger.info("Indexing financial documents...")
 
-    # ✅ Get real-time financial data
-    companies = ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN"]
-    documents = [fetch_financial_data(ticker) for ticker in companies]
+    # Load real data from Yahoo Finance
+    companies = ["AAPL", "MSFT", "TSLA"]  # Apple, Microsoft, Tesla
+    documents = load_financial_data(companies)
 
-    # ✅ Convert to embeddings
-    document_embeddings = embedding_model.encode(documents, convert_to_numpy=True)
+    # Convert text to embeddings
+    for doc in documents:
+        embedding = embedding_model.encode(doc["statement"], convert_to_tensor=True)
+        document_index.append({"company": doc["company"], "statement": doc["statement"], "embedding": embedding})
 
-    # ✅ Create FAISS index
-    index = faiss.IndexFlatL2(document_embeddings.shape[1])
-    index.add(document_embeddings)
+    logger.info(f"✅ Indexed {len(document_index)} documents.")
 
-    # ✅ Setup BM25 for keyword-based retrieval
-    tokenized_docs = [doc.lower().split() for doc in documents]
-    bm25 = BM25Okapi(tokenized_docs)
+# ✅ Step 3: Implement RAG Retrieval & Response
+def retrieve_relevant_document(query: str) -> str:
+    """
+    Retrieves the most relevant document for the given query using embeddings.
+    """
+    logger.info(f"Retrieving relevant document for query: {query}")
 
-    logger.info("✅ Document indexing completed successfully.")
+    if not document_index:
+        return "No financial data indexed yet. Try again later."
 
-def rag_pipeline(query):
-    """Retrieve relevant document and generate a response."""
-    # ✅ Convert query to embedding
-    query_embedding = embedding_model.encode([query], convert_to_numpy=True)
+    # Convert query to embedding
+    query_embedding = embedding_model.encode(query, convert_to_tensor=True)
 
-    # ✅ Find the closest document using FAISS
-    _, idx = index.search(query_embedding, k=1)
-    retrieved_doc = documents[idx[0][0]]
+    # Find most similar document (Basic cosine similarity)
+    best_match = max(document_index, key=lambda doc: torch.cosine_similarity(query_embedding, doc["embedding"], dim=0))
 
-    return f"Based on company financials: {retrieved_doc}"
+    logger.info(f"✅ Best match found: {best_match['statement']}")
+    return best_match["statement"]
 
+def rag_pipeline(query: str) -> str:
+    """
+    Generates a response based on retrieved financial statements.
+    """
+    relevant_doc = retrieve_relevant_document(query)
+    response = f"Based on financial data: {relevant_doc}"  # TODO: Replace with AI-generated response
+    return response
+
+# ✅ Step 4: Build Streamlit UI
 def main():
     try:
-        # ✅ Step 1: Index Documents Before Launching Streamlit
+        # ✅ Index Documents Before Launching Streamlit
         logger.info("Starting document indexing...")
         index_documents()
         logger.info("✅ Document indexing completed successfully.")
 
-        # ✅ Step 2: Configure Streamlit UI
+        # ✅ Configure Streamlit UI
         st.set_page_config(page_title="Financial RAG", layout="wide")
-        st.title("📊 Financial RAG Model")
-        st.write("Ask financial questions based on real-time company statements.")
+        st.title("Financial RAG Model")
+        st.write("Ask financial questions based on company statements.")
 
-        # ✅ Step 3: Setup User Input and Model Response
+        # ✅ Setup User Input and Model Response
         user_query = st.text_input("Enter your financial question:")
         if user_query:
             logger.info(f"User Query Received: {user_query}")
@@ -76,7 +122,7 @@ def main():
             st.write("### Model Response:")
             st.write(response)
 
-        # ✅ Step 4: Start Streamlit Server
+        # ✅ Start Streamlit Server
         port = int(os.getenv("PORT", 8501))  # Default to 8501 if not set
         logger.info(f"Starting Streamlit app on port {port}...")
         st.write(f"🚀 App is running on port: {port}")
