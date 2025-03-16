@@ -1,7 +1,7 @@
 import faiss
 import torch
 from sentence_transformers import SentenceTransformer
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import fastapi
 import streamlit as st
 import re
@@ -17,30 +17,21 @@ embedding_dim = embedder.get_sentence_embedding_dimension()
 # Hugging Face Token
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Load Smaller Open-Source SLM (Optimized for Streamlit Cloud)
-SLM_MODEL = "google/gemma-2b-it"  # Replaces Mistral-7B (too large)
+# Load CPU-Compatible SLM (No BitsAndBytes)
+SLM_MODEL = "google/gemma-2b-it"  # Uses smaller model
 
-# Configure 8-bit Quantization for Lower Memory Usage
-bnb_config = BitsAndBytesConfig(
-    load_in_8bit=True,  # Enables 8-bit mode
-    bnb_4bit_compute_dtype=torch.float16
-)
-
-# Load Tokenizer and Model with Optimized Settings
+# Load Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL, token=HF_TOKEN)
 
-try:
-    model = AutoModelForCausalLM.from_pretrained(
-        SLM_MODEL,
-        token=HF_TOKEN,
-        quantization_config=bnb_config,
-        device_map="auto"
-    )
-except RuntimeError:
-    # If 8-bit fails, fallback to CPU mode
-    model = AutoModelForCausalLM.from_pretrained(SLM_MODEL, token=HF_TOKEN).to("cpu")
+# Load Model in CPU Mode (since Streamlit Cloud does not support CUDA)
+model = AutoModelForCausalLM.from_pretrained(
+    SLM_MODEL,
+    token=HF_TOKEN,
+    torch_dtype=torch.float16,  # Use FP16 for memory efficiency
+    device_map="cpu"  # Force CPU usage
+)
 
-# Sample Financial Data (Chunk Merging & Adaptive Retrieval Applied)
+# Sample Financial Data
 financial_docs = [
     "Revenue for 2023 was $5B. Q4 showed strong performance with an increase in net profit.",
     "Net income increased by 20% due to higher sales in international markets.",
