@@ -2,7 +2,6 @@ import faiss
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-import fastapi
 import streamlit as st
 import re
 from rank_bm25 import BM25Okapi
@@ -13,11 +12,14 @@ import os
 EMBEDDING_MODEL = "intfloat/e5-large-v2"  # or "BAAI/bge-large-en"
 embedder = SentenceTransformer(EMBEDDING_MODEL)
 embedding_dim = embedder.get_sentence_embedding_dimension()
-HF_TOKEN = os.getenv("HF_TOKEN")
+
+# Load Hugging Face API Token from Streamlit Secrets
+HF_TOKEN = st.secrets["HF_TOKEN"]  # Use secrets manager
 
 # Load Open-Source SLM
 SLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
 tokenizer = AutoTokenizer.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN)
+
 # Configure 4-bit Quantization with CPU Offloading
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -29,7 +31,7 @@ bnb_config = BitsAndBytesConfig(
 # Load Model with Auto Device Mapping
 model = AutoModelForCausalLM.from_pretrained(SLM_MODEL, use_auth_token=HF_TOKEN, device_map="auto")
 
-# Sample Financial Data (Chunk Merging & Adaptive Retrieval Applied)
+# Sample Financial Data
 financial_docs = [
     "Revenue for 2023 was $5B. Q4 showed strong performance with an increase in net profit.",
     "Net income increased by 20% due to higher sales in international markets.",
@@ -60,6 +62,9 @@ def index_documents():
     embeddings = embedder.encode(chunked_docs, convert_to_tensor=True).cpu().numpy()
     index.add(embeddings)
 
+# Perform indexing before running the Streamlit app
+index_documents()
+
 # Adaptive Retrieval Function
 def retrieve_documents(query, top_k=3):
     query_embedding = embedder.encode([query], convert_to_tensor=True).cpu().numpy()
@@ -72,41 +77,4 @@ def retrieve_documents(query, top_k=3):
 # Guardrail: Input-Side Filtering
 FORBIDDEN_TERMS = ["predict", "stock price"]
 def validate_query(query):
-    if any(re.search(fr"\\b{term}\\b", query, re.IGNORECASE) for term in FORBIDDEN_TERMS):
-        return "Query contains speculative terms. Please refine your question."
-    return None
-
-# Response Generation
-def generate_response(context, question):
-    input_text = f"Context: {context} \n Question: {question}"
-    inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_length=200)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-# FastAPI Endpoint
-app = fastapi.FastAPI()
-
-@app.get("/query")
-def query_api(q: str):
-    error = validate_query(q)
-    if error:
-        return {"error": error}
-    retrieved_docs = retrieve_documents(q)
-    response = generate_response(" ".join(retrieved_docs), q)
-    return {"answer": response, "sources": retrieved_docs}
-
-# Streamlit UI
-st.title("Financial RAG Q&A")
-user_query = st.text_input("Ask a financial question")
-if st.button("Submit"):
-    error = validate_query(user_query)
-    if error:
-        st.error(error)
-    else:
-        retrieved_docs = retrieve_documents(user_query)
-        response = generate_response(" ".join(retrieved_docs), user_query)
-        st.write("**Answer:**", response)
-        st.write("**Sources:**", retrieved_docs)
-
-if __name__ == "__main__":
-    index_documents()
+    if any(re.search(fr"\b{term}\b", query, re.IGNORECAS
